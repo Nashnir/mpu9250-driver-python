@@ -18,7 +18,7 @@ class Mpu9250:
     def getWord(self, register):
         """Read word from given register address."""
         high = self.getByte(register)
-        low = self.getByte(register)
+        low = self.getByte(register + 1)
         return (high << 8) | low
     
     def getGyroscopeX(self):
