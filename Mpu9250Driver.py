@@ -3,24 +3,43 @@
 
 import smbus
 
+# I2C device addresses
+MPU9250_ADDRESS = 0x68
+AK8963_ADDRESS = 0x0C
+
 # MPU-9250 register addresses
 SAMPLE_RATE_DIVIDER = 0x19
 CONFIGURATION = 0x1A
+FIFO_ENABLE_REGISTER = 0x23
 I2C_MASTER_CONTROL = 0x24
 I2C_SLAVE0_DEVICE_ADDRESS = 0x25
 I2C_SLAVE0_REGISTER_ADDRESS = 0x26
 I2C_SLAVE0_CONTROL = 0x27
-INT_PIN_AND_BYPASS_CONFIGURATION = 0x37
+INTERRUPT_PIN_AND_BYPASS_CONFIGURATION = 0x37
+INTERRUPT_ENABLE = 0x38
 I2C_MASTER_DELAY_CONTROL = 0x67
+ACCELEROMETER_INTERRUPT_CONTROL = 0x69
 USER_CONTROL = 0x6A
 DEVICE_ID = 0x75
 
-# Magnetometer register addresses
+# AK8963 magnetometer register addresses
 MAGNETOMETER_DEVICE_ID = 0x00
 CONTROL_1 = 0x0A
 
-# INT_PIN_AND_BYPASS_CONFIGURATION_ADDRESS bits
+# CONFIGURATION bits
+EXTERNAL_SYNCHRONIZATION_SET_BITS = 0x38
+
+# I2C_MASTER_CONTROL bits
+MULTI_MASTER_ENABLE = 0x80
+SLAVE3_FIFO_ENABLE = 0x20
+
+# INTERRUPT_PIN_AND_BYPASS_CONFIGURATION bits
+FSYNC_INTERRUPT_MODE_ENABLE = 0x04
 BYPASS_ENABLE = 0x02
+
+# USER_CONTROL bits
+FIFO_ENABLE = 0x40
+I2C_MASTER_ENABLE = 0x20
 
 # CONTROL_1 bits
 POWER_DOWN_MODE = 0x0
@@ -41,28 +60,24 @@ class Mpu9250:
         """Opens the Linux device."""
         self.smbus = smbus.SMBus(busNumber)
         self.address = deviceAddress
-        self.magnetometerAddress = 0x0C
+        # Configure the device.
+        # Pass-through mode is used, which means that the AK8963 magnetometer
+        # is accessed as a separate I2C device.
+        self.resetBits(CONFIGURATION, EXTERNAL_SYNCHRONIZATION_SET_BITS)
+        self.setByte(FIFO_ENABLE_REGISTER, 0x00)
+        self.resetBits(I2C_MASTER_CONTROL, (MULTI_MASTER_ENABLE | SLAVE3_FIFO_ENABLE))
+        self.resetBits(INTERRUPT_PIN_AND_BYPASS_CONFIGURATION, FSYNC_INTERRUPT_MODE_ENABLE)
+        self.setBits(INTERRUPT_PIN_AND_BYPASS_CONFIGURATION, BYPASS_ENABLE)
+        self.setByte(INTERRUPT_ENABLE, 0x00)
+        self.setByte(ACCELEROMETER_INTERRUPT_CONTROL, 0x00)
+        self.resetBits(USER_CONTROL, (FIFO_ENABLE | I2C_MASTER_ENABLE))
+        self.setByte(CONTROL_1, CONTINUOUS_MEASUREMENT_MODE_1, True)
         # Assert that the connection is OK
-        self.setByte(USER_CONTROL, 0x00)
-        self.orByte(INT_PIN_AND_BYPASS_CONFIGURATION, BYPASS_ENABLE)
         assert (self.getByte(DEVICE_ID) == 0x73)
         assert (self.getByte(MAGNETOMETER_DEVICE_ID, True) == 0x48)
-        # Configure magnetometer.
-        # Status registers must be configured into the read range of I2C
-        # slave, otherwise the sensor data never gets updated.
-        self.setByte(CONTROL_1, FUSE_ROM_ACCESS_MODE, True)
-        self.setByte(CONTROL_1, POWER_DOWN_MODE, True)
-        self.setByte(CONTROL_1, CONTINUOUS_MEASUREMENT_MODE_2, True)
-        self.andByte(INT_PIN_AND_BYPASS_CONFIGURATION, ~BYPASS_ENABLE)
-        self.setByte(I2C_MASTER_CONTROL, 0x40)
-        self.setByte(I2C_MASTER_DELAY_CONTROL, 0x01)
-        self.setByte(USER_CONTROL, 0x20)
-        self.setByte(I2C_SLAVE0_DEVICE_ADDRESS, self.magnetometerAddress | 0x80)
-        self.setByte(I2C_SLAVE0_REGISTER_ADDRESS, 0x02) # 0x02 is status register
-        self.setByte(I2C_SLAVE0_CONTROL, 0x88)
     
     def getDeviceAddress(self, accessMagnetometer):
-        return self.magnetometerAddress if accessMagnetometer else self.address
+        return AK8963_ADDRESS if accessMagnetometer else self.address
     
     def getByte(self, register, accessMagnetometer = False):
         """Read byte from given register address."""
@@ -76,21 +91,21 @@ class Mpu9250:
     
     def getLittleEndianWord(self, register):
         """Read little-endian word from given register address."""
-        low = self.getByte(register)
-        high = self.getByte(register + 1)
+        low = self.getByte(register, True)
+        high = self.getByte(register + 1, True)
         return convertBytesToWord(low, high)
     
     def setByte(self, register, value, accessMagnetometer = False):
         """Write byte to given register address."""
         return self.smbus.write_byte_data(self.getDeviceAddress(accessMagnetometer), register, value)
     
-    def orByte(self, register, mask):
+    def setBits(self, register, mask):
         value = self.getByte(register)
         self.setByte(register, value | mask)
     
-    def andByte(self, register, mask):
+    def resetBits(self, register, mask):
         value = self.getByte(register)
-        self.setByte(register, value & mask)
+        self.setByte(register, value & (~mask))
     
     def getGyroscopeX(self):
         return self.getBigEndianWord(0x43)
@@ -117,16 +132,21 @@ class Mpu9250:
         return (self.getAccelerometerX(), self.getAccelerometerY(), self.getAccelerometerZ())
     
     def getMagnetometerX(self):
-        return self.getLittleEndianWord(0x4A)
+        return self.getLittleEndianWord(0x03)
     
     def getMagnetometerY(self):
-        return self.getLittleEndianWord(0x4C)
+        return self.getLittleEndianWord(0x05)
     
     def getMagnetometerZ(self):
-        return self.getLittleEndianWord(0x4E)
+        return self.getLittleEndianWord(0x07)
     
     def getMagnetometer(self):
-        return (self.getMagnetometerX(), self.getMagnetometerY(), self.getMagnetometerZ())
+        data = (self.getMagnetometerX(), self.getMagnetometerY(), self.getMagnetometerZ())
+        # Status registers must be read, otherwise the sensor data never
+        # gets updated.
+        self.getByte(0x02, True)
+        self.getByte(0x09, True)
+        return data
     
     def getTemperature(self):
         return self.getBigEndianWord(0x41)
