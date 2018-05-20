@@ -1,7 +1,7 @@
 # http://www.invensense.com/wp-content/uploads/2015/02/PS-MPU-9250A-01-v1.1.pdf
 # http://www.invensense.com/wp-content/uploads/2017/11/RM-MPU-9250A-00-v1.6.pdf
 
-import smbus
+from smbus import SMBus
 
 # I2C device addresses
 MPU9250_ADDRESS = 0x68
@@ -56,10 +56,9 @@ def convertBytesToWord(low, high):
 class Mpu9250:
     """MPU-9250 gyroscope/accelerometer/magnetometer I2C driver"""
     
-    def __init__(self, busNumber, deviceAddress):
+    def __init__(self, busNumber):
         """Opens the Linux device."""
-        self.smbus = smbus.SMBus(busNumber)
-        self.address = deviceAddress
+        self.smbus = SMBus(busNumber)
         # Configure the device.
         # Pass-through mode is used, which means that the AK8963 magnetometer
         # is accessed as a separate I2C device.
@@ -77,7 +76,7 @@ class Mpu9250:
         assert (self.getByte(MAGNETOMETER_DEVICE_ID, True) == 0x48)
     
     def getDeviceAddress(self, accessMagnetometer):
-        return AK8963_ADDRESS if accessMagnetometer else self.address
+        return AK8963_ADDRESS if accessMagnetometer else MPU9250_ADDRESS
     
     def getByte(self, register, accessMagnetometer = False):
         """Read byte from given register address."""
@@ -107,41 +106,20 @@ class Mpu9250:
         value = self.getByte(register)
         self.setByte(register, value & (~mask))
     
-    def getGyroscopeX(self):
-        return self.getBigEndianWord(0x43)
+    def getThreeBigEndianWords(self, address):
+        return (self.getBigEndianWord(address), self.getBigEndianWord(address + 2), self.getBigEndianWord(address + 4))
     
-    def getGyroscopeY(self):
-        return self.getBigEndianWord(0x45)
-    
-    def getGyroscopeZ(self):
-        return self.getBigEndianWord(0x47)
+    def getThreeLittleEndianWords(self, address):
+        return 
     
     def getGyroscope(self):
-        return (self.getGyroscopeX(), self.getGyroscopeY(), self.getGyroscopeZ())
-    
-    def getAccelerometerX(self):
-        return self.getBigEndianWord(0x3B)
-    
-    def getAccelerometerY(self):
-        return self.getBigEndianWord(0x3D)
-    
-    def getAccelerometerZ(self):
-        return self.getBigEndianWord(0x3F)
+        return self.getThreeBigEndianWords(0x43)
     
     def getAccelerometer(self):
-        return (self.getAccelerometerX(), self.getAccelerometerY(), self.getAccelerometerZ())
-    
-    def getMagnetometerX(self):
-        return self.getLittleEndianWord(0x03)
-    
-    def getMagnetometerY(self):
-        return self.getLittleEndianWord(0x05)
-    
-    def getMagnetometerZ(self):
-        return self.getLittleEndianWord(0x07)
+        return self.getThreeBigEndianWords(0x3B)
     
     def getMagnetometer(self):
-        data = (self.getMagnetometerX(), self.getMagnetometerY(), self.getMagnetometerZ())
+        data = (self.getLittleEndianWord(0x03), self.getLittleEndianWord(0x05), self.getLittleEndianWord(0x07))
         # Status registers must be read, otherwise the sensor data never
         # gets updated.
         self.getByte(0x02, True)

@@ -3,7 +3,7 @@
 from time import sleep
 from Mpu9250Driver import Mpu9250
 
-mpu9250 = Mpu9250(1, 0x68)
+mpu9250 = Mpu9250(1)
 
 while True:
     sensorData = mpu9250.getSensorData()
