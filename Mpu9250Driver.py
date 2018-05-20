@@ -59,6 +59,9 @@ class Mpu9250:
     def __init__(self, busNumber):
         """Opens the Linux device."""
         self.smbus = SMBus(busNumber)
+        # Calibration data
+        self.roomTemperatureOffset = 1000
+        self.temperatureSensitivity = 100
         # Configure the device.
         # Pass-through mode is used, which means that the AK8963 magnetometer
         # is accessed as a separate I2C device.
@@ -129,10 +132,18 @@ class Mpu9250:
     def getTemperature(self):
         return self.getBigEndianWord(0x41)
     
-    def getSensorData(self):
+    def getRawSensorData(self):
         return {
             'gyroscope': self.getGyroscope(),
             'accelerometer': self.getAccelerometer(),
             'magnetometer': self.getMagnetometer(),
             'temperature': self.getTemperature()
         }
+    
+    def getSensorData(self):
+        data = self.getRawSensorData()
+        # Convert temperature to celsius.
+        rawTemperature = data['temperature']
+        celsiusTemperature = ((rawTemperature - self.roomTemperatureOffset) / self.temperatureSensitivity) + 21
+        data['temperature'] = celsiusTemperature
+        return data
