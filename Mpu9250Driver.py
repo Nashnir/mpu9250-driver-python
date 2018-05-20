@@ -112,9 +112,6 @@ class Mpu9250:
     def getThreeBigEndianWords(self, address):
         return (self.getBigEndianWord(address), self.getBigEndianWord(address + 2), self.getBigEndianWord(address + 4))
     
-    def getThreeLittleEndianWords(self, address):
-        return 
-    
     def getGyroscope(self):
         return self.getThreeBigEndianWords(0x43)
     
