@@ -6,6 +6,8 @@ from Mpu9250Driver import Mpu9250
 mpu9250 = Mpu9250(1)
 
 while True:
-    sensorData = mpu9250.getSensorData()
-    print(sensorData)
+    rawSensorData = mpu9250.getRawSensorData()
+    print(rawSensorData)
+    print(mpu9250.convert(rawSensorData))
+    print('')
     sleep(0.33)
