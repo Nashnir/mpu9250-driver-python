@@ -77,21 +77,21 @@ def convertGyroscopeToDegreesPerSecond(rawGyroscope, scale):
     gyroscope = []
     for index in range(3):
         gyroscope.append((rawGyroscope[index] / 32768) * scale)
-    return gyroscope
+    return tuple(gyroscope)
 
 def convertAccelerometerToG(rawAccelerometer, scale):
     # TODO Sensitivity adjustment? Depends on temperature?
     accelerometer = []
     for index in range(3):
         accelerometer.append((rawAccelerometer[index] / 32768) * scale)
-    return accelerometer
+    return tuple(accelerometer)
 
 def convertMagnetometerToMicroTesla(rawMagnetometer):
     # TODO Sensitivity adjustment? Depends on temperature?
     magnetometer = []
     for index in range(3):
         magnetometer.append((rawMagnetometer[index] / 32760) * 4912)
-    return magnetometer
+    return tuple(magnetometer)
 
 def convertTemperatureToCelsius(rawTemperature, roomTemperatureOffset, temperatureSensitivity):
     return ((rawTemperature - roomTemperatureOffset) / temperatureSensitivity) + 21
@@ -166,7 +166,7 @@ class Mpu9250:
         self.setByte(register, value & (~mask))
     
     def getThreeBigEndianWords(self, address):
-        return [self.getSignedBigEndianWord(address), self.getSignedBigEndianWord(address + 2), self.getSignedBigEndianWord(address + 4)]
+        return (self.getSignedBigEndianWord(address), self.getSignedBigEndianWord(address + 2), self.getSignedBigEndianWord(address + 4))
     
     def getGyroscope(self):
         return self.getThreeBigEndianWords(0x43)
@@ -175,7 +175,7 @@ class Mpu9250:
         return self.getThreeBigEndianWords(0x3B)
     
     def getMagnetometer(self):
-        data = [self.getLittleEndianWord(0x03), self.getLittleEndianWord(0x05), self.getLittleEndianWord(0x07)]
+        data = (self.getLittleEndianWord(0x03), self.getLittleEndianWord(0x05), self.getLittleEndianWord(0x07))
         # Status registers must be read, otherwise the sensor data never
         # gets updated.
         self.getByte(0x02, True)
