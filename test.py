@@ -4,6 +4,7 @@ from time import sleep
 from Mpu9250Driver import Mpu9250
 
 mpu9250 = Mpu9250(1)
+print(mpu9250.getMagnetometerSensitivity())
 
 while True:
     rawSensorData = mpu9250.getRawSensorData()

@@ -33,12 +33,14 @@ EXTERNAL_SYNCHRONIZATION_SET_BITS = 0x38
 
 # GYROSCOPE_CONFIGURATION bits
 GYROSCOPE_FULL_SCALE_SELECT_BITS = 0x18
+GYROSCOPE_FULL_SCALE_SELECT_250 = 0x00
 GYROSCOPE_FULL_SCALE_SELECT_500 = 0x08
 GYROSCOPE_FULL_SCALE_SELECT_1000 = 0x10
 GYROSCOPE_FULL_SCALE_SELECT_2000 = 0x18
 
 # ACCELEROMETER_CONFIGURATION bits
 ACCELEROMETER_FULL_SCALE_SELECT_BITS = 0x18
+ACCELEROMETER_FULL_SCALE_SELECT_2G = 0x00
 ACCELEROMETER_FULL_SCALE_SELECT_4G = 0x08
 ACCELEROMETER_FULL_SCALE_SELECT_8G = 0x10
 ACCELEROMETER_FULL_SCALE_SELECT_16G = 0x18
@@ -65,6 +67,20 @@ SELF_TEST_MODE = 0x8
 FUSE_ROM_ACCESS_MODE = 0xF
 OUTPUT_16_BIT = 0x10
 
+gyroscopeScaleToSensitivityValue = {
+    GYROSCOPE_FULL_SCALE_SELECT_250: 131,
+    GYROSCOPE_FULL_SCALE_SELECT_500: 65.5,
+    GYROSCOPE_FULL_SCALE_SELECT_1000: 32.8,
+    GYROSCOPE_FULL_SCALE_SELECT_2000: 16.4
+}
+
+accelerometerScaleToSensitivityValue = {
+    ACCELEROMETER_FULL_SCALE_SELECT_2G: 16384,
+    ACCELEROMETER_FULL_SCALE_SELECT_4G: 8192,
+    ACCELEROMETER_FULL_SCALE_SELECT_8G: 4096,
+    ACCELEROMETER_FULL_SCALE_SELECT_16G: 2048
+}
+
 def convertBytesToWord(low, high):
     return (high << 8) | low
 
@@ -72,47 +88,30 @@ def convertBytesToInteger(low, high):
     word = convertBytesToWord(low, high)
     return ((-((word ^ 0xFFFF) + 1)) if (word & 0x8000) else word)
 
-def convertGyroscopeToDegreesPerSecond(rawGyroscope, scale):
-    # TODO Sensitivity adjustment? Depends on temperature?
-    gyroscope = []
-    for index in range(3):
-        gyroscope.append((rawGyroscope[index] / 32768) * scale)
-    return tuple(gyroscope)
+def multiplyIdentity(factor):
+    return (factor, factor, factor)
 
-def convertAccelerometerToG(rawAccelerometer, scale):
-    # TODO Sensitivity adjustment? Depends on temperature?
-    accelerometer = []
-    for index in range(3):
-        accelerometer.append((rawAccelerometer[index] / 32768) * scale)
-    return tuple(accelerometer)
-
-def convertMagnetometerToMicroTesla(rawMagnetometer):
-    # TODO Sensitivity adjustment? Depends on temperature?
-    magnetometer = []
-    for index in range(3):
-        magnetometer.append((rawMagnetometer[index] / 32760) * 4912)
-    return tuple(magnetometer)
-
-def convertTemperatureToCelsius(rawTemperature, roomTemperatureOffset, temperatureSensitivity):
-    return ((rawTemperature - roomTemperatureOffset) / temperatureSensitivity) + 21
+def tupleMultiply(tuple0, tuple1):
+    return (tuple0[0] * tuple1[0], tuple0[1] * tuple1[1], tuple0[2] * tuple1[2])
 
 class Mpu9250:
     """MPU-9250 gyroscope/accelerometer/magnetometer I2C driver"""
     
-    def __init__(self, busNumber):
+    def __init__(self, busNumber, gyroscopeScale = GYROSCOPE_FULL_SCALE_SELECT_2000, accelerometerScale = ACCELEROMETER_FULL_SCALE_SELECT_16G, magnetometer16BitMode = True):
         """Opens the Linux device."""
         self.smbus = SMBus(busNumber)
         # Calibration data
+        self.gyroscopeScale = gyroscopeScale
+        self.accelerometerScale = accelerometerScale
+        self.magnetometer16BitMode = magnetometer16BitMode
         self.roomTemperatureOffset = 1000
         self.temperatureSensitivity = 100
-        self.gyroscopeScale = 2000
-        self.accelerometerScale = 16
         # Configure the device.
         # Pass-through mode is used, which means that the AK8963 magnetometer
         # is accessed as a separate I2C device.
         self.resetBits(CONFIGURATION, EXTERNAL_SYNCHRONIZATION_SET_BITS)
-        self.setByte(GYROSCOPE_CONFIGURATION, GYROSCOPE_FULL_SCALE_SELECT_2000)
-        self.setByte(ACCELEROMETER_CONFIGURATION, ACCELEROMETER_FULL_SCALE_SELECT_16G)
+        self.setByte(GYROSCOPE_CONFIGURATION, gyroscopeScale)
+        self.setByte(ACCELEROMETER_CONFIGURATION, accelerometerScale)
         self.setByte(FIFO_ENABLE_REGISTER, 0x00)
         self.resetBits(I2C_MASTER_CONTROL, (MULTI_MASTER_ENABLE | SLAVE3_FIFO_ENABLE))
         self.resetBits(INTERRUPT_PIN_AND_BYPASS_CONFIGURATION, FSYNC_INTERRUPT_MODE_ENABLE)
@@ -120,7 +119,9 @@ class Mpu9250:
         self.setByte(INTERRUPT_ENABLE, 0x00)
         self.setByte(ACCELEROMETER_INTERRUPT_CONTROL, 0x00)
         self.resetBits(USER_CONTROL, (FIFO_ENABLE | I2C_MASTER_ENABLE))
-        self.setByte(CONTROL_1, (CONTINUOUS_MEASUREMENT_MODE_1 | OUTPUT_16_BIT), True)
+        self.setByte(CONTROL_1, (CONTINUOUS_MEASUREMENT_MODE_1 | (OUTPUT_16_BIT if magnetometer16BitMode else 0)), True)
+        # Read magnetometer sensitivity adjustment values for the 16-bit mode.
+        self.magnetometerSensitivity = (self.getMagnetometerSensitivityValue(0), self.getMagnetometerSensitivityValue(1), self.getMagnetometerSensitivityValue(2))
         # Assert that the connection is OK
         assert (self.getByte(DEVICE_ID) == 0x73)
         assert (self.getByte(MAGNETOMETER_DEVICE_ID, True) == 0x48)
@@ -148,10 +149,7 @@ class Mpu9250:
         """Read little-endian word from given register address."""
         low = self.getByte(register, True)
         high = self.getByte(register + 1, True)
-        integer = convertBytesToInteger(low, high)
-        if (integer > 32760): integer = 32760
-        if (integer < -32760): integer = -32760
-        return integer
+        return convertBytesToInteger(low, high)
     
     def setByte(self, register, value, accessMagnetometer = False):
         """Write byte to given register address."""
@@ -168,6 +166,10 @@ class Mpu9250:
     def getThreeBigEndianWords(self, address):
         return (self.getSignedBigEndianWord(address), self.getSignedBigEndianWord(address + 2), self.getSignedBigEndianWord(address + 4))
     
+    def getMagnetometerSensitivityValue(self, axis):
+        rawValue = self.getByte(0x10 + axis, True)
+        return ((rawValue - 128) * 0.5) / 128 + 1 # 0.5..1.5
+    
     def getGyroscope(self):
         return self.getThreeBigEndianWords(0x43)
     
@@ -183,7 +185,8 @@ class Mpu9250:
         return data
     
     def getTemperature(self):
-        return self.getBigEndianWord(0x41)
+        temperature = self.previousTemperature = self.getBigEndianWord(0x41)
+        return temperature
     
     def getRawSensorData(self):
         return {
@@ -193,13 +196,36 @@ class Mpu9250:
             'temperature': self.getTemperature()
         }
     
+    def getGyroscopeSensitivity(self):
+        sensitivity = multiplyIdentity(1 / gyroscopeScaleToSensitivityValue[self.gyroscopeScale])
+        return sensitivity # TODO Depends on temperature
+    
+    def getAccelerometerSensitivity(self):
+        sensitivity = multiplyIdentity(1 / accelerometerScaleToSensitivityValue[self.accelerometerScale])
+        return sensitivity # TODO Depends on temperature
+    
+    def getMagnetometerSensitivity(self):
+        return self.magnetometerSensitivity if self.magnetometer16BitMode else multiplyIdentity(0.6)
+    
+    def convertGyroscopeToDegreesPerSecond(self, rawGyroscope):
+        return tupleMultiply(rawGyroscope, self.getGyroscopeSensitivity())
+    
+    def convertAccelerometerToG(self, rawAccelerometer):
+        return tupleMultiply(rawAccelerometer, self.getAccelerometerSensitivity())
+    
+    def convertMagnetometerToMicroTesla(self, rawMagnetometer):
+        return tupleMultiply(rawMagnetometer, self.getMagnetometerSensitivity())
+    
+    def convertTemperatureToCelsius(self, rawTemperature):
+        return ((rawTemperature - self.roomTemperatureOffset) / self.temperatureSensitivity) + 21
+    
     def convert(self, rawSensorData):
         """Convert raw sensor data to common units."""
         return {
-            'gyroscope': convertGyroscopeToDegreesPerSecond(rawSensorData['gyroscope'], self.gyroscopeScale),
-            'accelerometer': convertAccelerometerToG(rawSensorData['accelerometer'], self.accelerometerScale),
-            'magnetometer': convertMagnetometerToMicroTesla(rawSensorData['magnetometer']),
-            'temperature': convertTemperatureToCelsius(rawSensorData['temperature'], self.roomTemperatureOffset, self.temperatureSensitivity)
+            'gyroscope': self.convertGyroscopeToDegreesPerSecond(rawSensorData['gyroscope']),
+            'accelerometer': self.convertAccelerometerToG(rawSensorData['accelerometer']),
+            'magnetometer': self.convertMagnetometerToMicroTesla(rawSensorData['magnetometer']),
+            'temperature': self.convertTemperatureToCelsius(rawSensorData['temperature'])
         }
     
     def getSensorData(self):
