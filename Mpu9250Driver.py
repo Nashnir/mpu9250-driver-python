@@ -33,17 +33,17 @@ EXTERNAL_SYNCHRONIZATION_SET_BITS = 0x38
 
 # GYROSCOPE_CONFIGURATION bits
 GYROSCOPE_FULL_SCALE_SELECT_BITS = 0x18
-GYROSCOPE_FULL_SCALE_SELECT_250 = 0x00
+GYROSCOPE_FULL_SCALE_SELECT_250 = 0x00 # Unit is degrees per second
 GYROSCOPE_FULL_SCALE_SELECT_500 = 0x08
 GYROSCOPE_FULL_SCALE_SELECT_1000 = 0x10
 GYROSCOPE_FULL_SCALE_SELECT_2000 = 0x18
 
 # ACCELEROMETER_CONFIGURATION bits
 ACCELEROMETER_FULL_SCALE_SELECT_BITS = 0x18
-ACCELEROMETER_FULL_SCALE_SELECT_2G = 0x00
-ACCELEROMETER_FULL_SCALE_SELECT_4G = 0x08
-ACCELEROMETER_FULL_SCALE_SELECT_8G = 0x10
-ACCELEROMETER_FULL_SCALE_SELECT_16G = 0x18
+ACCELEROMETER_FULL_SCALE_SELECT_2 = 0x00 # Unit is G
+ACCELEROMETER_FULL_SCALE_SELECT_4 = 0x08
+ACCELEROMETER_FULL_SCALE_SELECT_8 = 0x10
+ACCELEROMETER_FULL_SCALE_SELECT_16 = 0x18
 
 # I2C_MASTER_CONTROL bits
 MULTI_MASTER_ENABLE = 0x80
@@ -75,10 +75,10 @@ gyroscopeScaleToSensitivityValue = {
 }
 
 accelerometerScaleToSensitivityValue = {
-    ACCELEROMETER_FULL_SCALE_SELECT_2G: 16384,
-    ACCELEROMETER_FULL_SCALE_SELECT_4G: 8192,
-    ACCELEROMETER_FULL_SCALE_SELECT_8G: 4096,
-    ACCELEROMETER_FULL_SCALE_SELECT_16G: 2048
+    ACCELEROMETER_FULL_SCALE_SELECT_2: 16384,
+    ACCELEROMETER_FULL_SCALE_SELECT_4: 8192,
+    ACCELEROMETER_FULL_SCALE_SELECT_8: 4096,
+    ACCELEROMETER_FULL_SCALE_SELECT_16: 2048
 }
 
 def convertBytesToWord(low, high):
@@ -97,7 +97,7 @@ def tupleMultiply(tuple0, tuple1):
 class Mpu9250:
     """MPU-9250 gyroscope/accelerometer/magnetometer I2C driver"""
     
-    def __init__(self, busNumber, gyroscopeScale = GYROSCOPE_FULL_SCALE_SELECT_2000, accelerometerScale = ACCELEROMETER_FULL_SCALE_SELECT_16G, magnetometer16BitMode = True):
+    def __init__(self, busNumber, gyroscopeScale = GYROSCOPE_FULL_SCALE_SELECT_2000, accelerometerScale = ACCELEROMETER_FULL_SCALE_SELECT_16, magnetometer16BitMode = True):
         """Opens the Linux device."""
         self.smbus = SMBus(busNumber)
         # Calibration data
@@ -119,19 +119,26 @@ class Mpu9250:
         self.setByte(INTERRUPT_ENABLE, 0x00)
         self.setByte(ACCELEROMETER_INTERRUPT_CONTROL, 0x00)
         self.resetBits(USER_CONTROL, (FIFO_ENABLE | I2C_MASTER_ENABLE))
-        self.setByte(CONTROL_1, (CONTINUOUS_MEASUREMENT_MODE_1 | (OUTPUT_16_BIT if magnetometer16BitMode else 0)), True)
+        self.setMagnetometerByte(CONTROL_1, (CONTINUOUS_MEASUREMENT_MODE_1 | (OUTPUT_16_BIT if magnetometer16BitMode else 0)))
         # Read magnetometer sensitivity adjustment values for the 16-bit mode.
         self.magnetometerSensitivity = (self.getMagnetometerSensitivityValue(0), self.getMagnetometerSensitivityValue(1), self.getMagnetometerSensitivityValue(2))
         # Assert that the connection is OK
         assert (self.getByte(DEVICE_ID) == 0x73)
-        assert (self.getByte(MAGNETOMETER_DEVICE_ID, True) == 0x48)
+        assert (self.getMagnetometerByte(MAGNETOMETER_DEVICE_ID) == 0x48)
     
-    def getDeviceAddress(self, accessMagnetometer):
-        return AK8963_ADDRESS if accessMagnetometer else MPU9250_ADDRESS
-    
-    def getByte(self, register, accessMagnetometer = False):
+    def getByteLowLevel(self, deviceAddress, register):
         """Read byte from given register address."""
-        return self.smbus.read_byte_data(self.getDeviceAddress(accessMagnetometer), register)
+        return self.smbus.read_byte_data(deviceAddress, register)
+    
+    def setByteLowLevel(self, deviceAddress, register, value):
+        """Write byte to given register address."""
+        self.smbus.write_byte_data(deviceAddress, register, value)
+    
+    def getByte(self, register):
+        return self.getByteLowLevel(MPU9250_ADDRESS, register)
+    
+    def getMagnetometerByte(self, register):
+        return self.getByteLowLevel(AK8963_ADDRESS, register)
     
     def getTwoBytes(self, register):
         return (self.getByte(register), self.getByte(register + 1))
@@ -147,13 +154,15 @@ class Mpu9250:
     
     def getLittleEndianWord(self, register):
         """Read little-endian word from given register address."""
-        low = self.getByte(register, True)
-        high = self.getByte(register + 1, True)
+        low = self.getMagnetometerByte(register)
+        high = self.getMagnetometerByte(register + 1)
         return convertBytesToInteger(low, high)
     
-    def setByte(self, register, value, accessMagnetometer = False):
-        """Write byte to given register address."""
-        return self.smbus.write_byte_data(self.getDeviceAddress(accessMagnetometer), register, value)
+    def setByte(self, register, value):
+        self.setByteLowLevel(MPU9250_ADDRESS, register, value)
+    
+    def setMagnetometerByte(self, register, value):
+        self.setByteLowLevel(AK8963_ADDRESS, register, value)
     
     def setBits(self, register, mask):
         value = self.getByte(register)
@@ -167,7 +176,7 @@ class Mpu9250:
         return (self.getSignedBigEndianWord(address), self.getSignedBigEndianWord(address + 2), self.getSignedBigEndianWord(address + 4))
     
     def getMagnetometerSensitivityValue(self, axis):
-        rawValue = self.getByte(0x10 + axis, True)
+        rawValue = self.getMagnetometerByte(0x10 + axis)
         return ((rawValue - 128) * 0.5) / 128 + 1 # 0.5..1.5
     
     def getGyroscope(self):
@@ -180,8 +189,8 @@ class Mpu9250:
         data = (self.getLittleEndianWord(0x03), self.getLittleEndianWord(0x05), self.getLittleEndianWord(0x07))
         # Status registers must be read, otherwise the sensor data never
         # gets updated.
-        self.getByte(0x02, True)
-        self.getByte(0x09, True)
+        self.getMagnetometerByte(0x02)
+        self.getMagnetometerByte(0x09)
         return data
     
     def getTemperature(self):
